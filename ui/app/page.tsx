@@ -3,9 +3,20 @@
 import { useCoAgent, useCopilotAction } from "@copilotkit/react-core";
 import { CopilotKitCSSProperties, CopilotSidebar } from "@copilotkit/react-ui";
 import { useState } from "react";
-
+import { useAuth, useAuthUser, useLoginWithRedirect, useAuthActions } from "@frontegg/nextjs";
+import { AdminPortal } from "@frontegg/nextjs";
+import { useRouter } from "next/navigation";
+import { useCallback } from "react";
 export default function CopilotKitPage() {
   const [themeColor, setThemeColor] = useState("#6366f1");
+
+  const { isAuthenticated, user } = useAuth();
+  const router = useRouter();
+
+  const loginWithRedirect = useLoginWithRedirect();
+  const logout = useCallback(() => {
+    router.replace("/account/logout");
+  }, [router]);
 
   // 🪁 Frontend Actions: https://docs.copilotkit.ai/guides/frontend-actions
   useCopilotAction({
@@ -23,12 +34,9 @@ export default function CopilotKitPage() {
   });
 
   return (
-    <main
-      style={
-        { "--copilot-kit-primary-color": themeColor } as CopilotKitCSSProperties
-      }
-    >
+    <main style={{ "--copilot-kit-primary-color": themeColor } as CopilotKitCSSProperties}>
       <YourMainContent themeColor={themeColor} />
+
       <CopilotSidebar
         clickOutsideToClose={false}
         defaultOpen={true}
@@ -52,11 +60,17 @@ function YourMainContent({ themeColor }: { themeColor: string }) {
   const { state, setState } = useCoAgent<AgentState>({
     name: "sample_agent",
     initialState: {
-      proverbs: [
-        "CopilotKit may be new, but its the best thing since sliced bread.",
-      ],
+      proverbs: ["CopilotKit may be new, but its the best thing since sliced bread."],
     },
   });
+
+  const { isAuthenticated, user } = useAuth();
+  const router = useRouter();
+
+  const loginWithRedirect = useLoginWithRedirect();
+  const logout = useCallback(() => {
+    router.replace("/account/logout");
+  }, [router]);
 
   // 🪁 Frontend Actions: https://docs.copilotkit.ai/coagents/frontend-actions
   useCopilotAction({
@@ -84,11 +98,59 @@ function YourMainContent({ themeColor }: { themeColor: string }) {
     parameters: [{ name: "location", type: "string", required: true }],
     render: ({ args }) => {
       console.log("displayWeather", args);
-      return <WeatherCard location={args.location} themeColor={themeColor} />;
+      return (
+        <WeatherCard
+          location={args.location}
+          themeColor={themeColor}
+        />
+      );
     },
   });
 
-  console.log("proverbs", state.proverbs);
+  //🪁 Generative UI: https://docs.copilotkit.ai/coagents/generative-ui
+  useCopilotAction({
+    name: "authenticate",
+    description: "Login.",
+    parameters: [],
+    render: ({ args }) => {
+      console.log("authn copilot action", args);
+      return (
+        <>
+          {isAuthenticated ? (
+            <div>
+              <div>
+                <span>Logged in as: {user?.name}</span>
+              </div>
+              <div>
+                <button onClick={() => logout()}>Click to logout</button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <button onClick={() => loginWithRedirect()}>Click me to login</button>
+            </div>
+          )}
+        </>
+      );
+    },
+  });
+
+  //🪁 Generative UI: https://docs.copilotkit.ai/coagents/generative-ui
+  useCopilotAction({
+    name: "authorize",
+    description: "Fetch user permissions/roles.",
+    parameters: [],
+    render: ({ args }) => {
+      console.log("authz copilot action", args);
+      return (
+        <div>
+          <h1>Authz Checking...</h1>
+        </div>
+      );
+    },
+  });
+
+  // console.log("proverbs", state.proverbs);
 
   return (
     <div
@@ -96,9 +158,7 @@ function YourMainContent({ themeColor }: { themeColor: string }) {
       className="h-screen w-screen flex justify-center items-center flex-col transition-colors duration-300"
     >
       <div className="bg-white/20 backdrop-blur-md p-8 rounded-2xl shadow-xl max-w-2xl w-full">
-        <h1 className="text-4xl font-bold text-white mb-2 text-center">
-          Proverbs
-        </h1>
+        <h1 className="text-4xl font-bold text-white mb-2 text-center">Proverbs</h1>
         <p className="text-gray-200 text-center italic mb-6">
           This is a demonstrative page, but it could be anything you want! 🪁
         </p>
@@ -144,7 +204,11 @@ function SunIcon() {
       fill="currentColor"
       className="w-14 h-14 text-yellow-200"
     >
-      <circle cx="12" cy="12" r="5" />
+      <circle
+        cx="12"
+        cy="12"
+        r="5"
+      />
       <path
         d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
         strokeWidth="2"
@@ -156,13 +220,7 @@ function SunIcon() {
 
 // Weather card component where the location and themeColor are based on what the agent
 // sets via tool calls.
-function WeatherCard({
-  location,
-  themeColor,
-}: {
-  location?: string;
-  themeColor: string;
-}) {
+function WeatherCard({ location, themeColor }: { location?: string; themeColor: string }) {
   return (
     <div
       style={{ backgroundColor: themeColor }}
@@ -171,9 +229,7 @@ function WeatherCard({
       <div className="bg-white/20 p-4 w-full">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-xl font-bold text-white capitalize">
-              {location}
-            </h3>
+            <h3 className="text-xl font-bold text-white capitalize">{location}</h3>
             <p className="text-white">Current Weather</p>
           </div>
           <SunIcon />
