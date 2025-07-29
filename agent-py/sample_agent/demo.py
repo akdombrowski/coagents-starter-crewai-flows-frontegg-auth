@@ -4,23 +4,28 @@ through our FastAPI integration. However, you can also host in LangGraph platfor
 """
 
 import os
-from dotenv import load_dotenv
-load_dotenv() # pylint: disable=wrong-import-position
 
-from fastapi import FastAPI, Request
-import uvicorn
-from copilotkit.integrations.fastapi import add_fastapi_endpoint, CopilotKitRemoteEndpoint
-from copilotkit.crewai import CrewAIAgent
-from sample_agent.agent import SampleAgentFlow
-import logging
-import json
-from typing import Dict, Any, List
+from dotenv import load_dotenv
+
+load_dotenv()  # pylint: disable=wrong-import-position
+
 import copy
+import json
+import logging
+from typing import Any, Dict, List
+
+import uvicorn
+from copilotkit.crewai import CrewAIAgent
+from copilotkit.integrations.fastapi import CopilotKitRemoteEndpoint, add_fastapi_endpoint
+from fastapi import FastAPI, Request
+
+from sample_agent.agent import SampleAgentFlow
 
 app = FastAPI()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
 
 # Simple logging middleware
 @app.middleware("http")
@@ -32,6 +37,7 @@ async def log_requests(request: Request, call_next):
     # without attempting to read the body
     response = await call_next(request)
     return response
+
 
 class PersistenceAgent(CrewAIAgent):
     """
@@ -57,6 +63,11 @@ class PersistenceAgent(CrewAIAgent):
     def execute(self, *, thread_id, **kwargs):
         logger.info(f"[DEBUG] PersistenceAgent.execute called with thread_id: {thread_id}")
 
+        # Extract headers from kwargs (CopilotKit passes request info here)
+        headers = kwargs.get("headers", {})
+        jwt = headers.get("authorization")  # or headers.get("Authorization")
+        logger.info(f"[DEBUG] PersistenceAgent.execute:{jwt =}")
+
         # Create a fresh flow instance with the thread_id
         # This is simpler than trying to modify an existing flow
         new_flow = SampleAgentFlow(thread_id=thread_id)
@@ -74,15 +85,19 @@ class PersistenceAgent(CrewAIAgent):
 
         # Create a flow with the requested threadId
         flow = SampleAgentFlow(thread_id=thread_id)
-        logger.info(f"[DEBUG] Created new flow for get_state with ID: {getattr(flow.state, 'id', 'unknown')}")
+        logger.info(
+            f"[DEBUG] Created new flow for get_state with ID: {getattr(flow.state, 'id', 'unknown')}"
+        )
 
         # Replace self.flow with our new flow
         self.flow = flow
 
         # Use the parent's implementation
         result = await super().get_state(thread_id=thread_id)
-        logger.info(f"[DEBUG] get_state result: threadExists={result.get('threadExists', False)}, " +
-                    f"messages={len(result.get('messages', []))}")
+        logger.info(
+            f"[DEBUG] get_state result: threadExists={result.get('threadExists', False)}, "
+            + f"messages={len(result.get('messages', []))}"
+        )
 
         # If no existing state, create a default one
         if not result.get("threadExists", False):
@@ -96,12 +111,13 @@ class PersistenceAgent(CrewAIAgent):
                     "messages": [],
                     "copilotkit": {"actions": []},
                     "language": "english",
-                    "proverbs": []
+                    "proverbs": [],
                 },
-                "messages": []
+                "messages": [],
             }
 
         return result
+
 
 # Create a CopilotKit endpoint with our custom PersistenceAgent
 sdk = CopilotKitRemoteEndpoint(
@@ -117,6 +133,7 @@ sdk = CopilotKitRemoteEndpoint(
 # Register the standard CopilotKit endpoint
 add_fastapi_endpoint(app, sdk, "/copilotkit")
 
+
 def main():
     """Run the uvicorn server."""
     port = int(os.getenv("PORT", "8000"))
@@ -127,13 +144,15 @@ def main():
         port=port,
         reload=True,
         reload_dirs=(
-            ["."] +
-            (["../../../sdk-python/copilotkit"]
-             if os.path.exists("../../../sdk-python/copilotkit")
-             else []
-             )
-        )
+            ["."]
+            + (
+                ["../../../sdk-python/copilotkit"]
+                if os.path.exists("../../../sdk-python/copilotkit")
+                else []
+            )
+        ),
     )
+
 
 if __name__ == "__main__":
     print("Running main() function...")

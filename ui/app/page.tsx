@@ -102,7 +102,7 @@ function YourMainContent({ themeColor }: { themeColor: string }) {
         <WeatherCard
           location={args.location}
           themeColor={themeColor}
-        />
+        /> 
       );
     },
   });
@@ -112,7 +112,7 @@ function YourMainContent({ themeColor }: { themeColor: string }) {
     name: "authenticate",
     description: "Login.",
     parameters: [],
-    render: ({ args }) => {
+    renderAndWaitForResponse: ({ args }) => {
       console.log("authn copilot action", args);
       return (
         <>
