@@ -3,18 +3,26 @@ This is the main entry point for the agent.
 It defines the workflow graph, state, tools, nodes and edges.
 """
 
+import asyncio
+import copy
 import json
-from typing_extensions import Literal
-from typing import Any, Dict, Optional, Union, List, cast
-from pydantic import BaseModel
-from litellm import completion
-from crewai.flow.flow import Flow, start, router, listen
+import logging
+import uuid
+from os import getenv
+from typing import Any, Dict, List, Optional, Union, cast
+
+from copilotkit.crewai import CopilotKitState, copilotkit_exit, copilotkit_stream
+from crewai.flow.flow import Flow, listen, router, start
 from crewai.flow.persistence import persist
 from crewai.flow.persistence.base import FlowPersistence
-import uuid
-import copy
+from frontegg_ai_sdk import Environment, FronteggAiClient, FronteggAiClientConfig
+from litellm import completion
+from pydantic import BaseModel
+from typing_extensions import Literal
 
-from copilotkit.crewai import copilotkit_stream, CopilotKitState, copilotkit_exit
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 
 class AgentState(CopilotKitState):
     """
@@ -24,9 +32,12 @@ class AgentState(CopilotKitState):
     the CopilotKitState fields. We're also adding a custom field, `language`,
     which will be used to set the language of the agent.
     """
+
     language: Literal["english", "spanish"] = "english"
     proverbs: List[str] = ["CopilotKit may be new, but its the best thing since sliced bread."]
+    authenticated: bool = False
     # your_custom_agent_state: str = ""
+
 
 GET_WEATHER_TOOL = {
     "type": "function",
@@ -38,12 +49,12 @@ GET_WEATHER_TOOL = {
             "properties": {
                 "location": {
                     "type": "string",
-                    "description": "The city and state, e.g. San Francisco, CA"
-                    }
-                    },
-            "required": ["location"]
-        }
-    }
+                    "description": "The city and state, e.g. San Francisco, CA",
+                }
+            },
+            "required": ["location"],
+        },
+    },
 }
 
 tools = [
@@ -52,9 +63,10 @@ tools = [
 ]
 
 tool_handlers = {
-    "get_weather": lambda args: f"The weather for {args['location']} is 70 degrees."
+    "get_weather": lambda args: f"The weather for {args['location']} is 70 degrees.",
     # your tool handler here
 }
+
 
 class InMemoryFlowPersistence(FlowPersistence):
     def __init__(self):
@@ -86,7 +98,6 @@ class InMemoryFlowPersistence(FlowPersistence):
         elif isinstance(state_data, dict):
             state_dict = state_data
 
-
         # Check if we have an ID mismatch
         state_id = None
         if isinstance(state_dict, dict) and "id" in state_dict:
@@ -97,7 +108,6 @@ class InMemoryFlowPersistence(FlowPersistence):
 
         # Special handling for proper message serialization
         if "messages" in state_dict and state_dict["messages"]:
-
             # Convert any Message objects to a format that's compatible with crewai_flow_messages_to_copilotkit
             serialized_messages = []
             for msg in state_dict["messages"]:
@@ -116,7 +126,7 @@ class InMemoryFlowPersistence(FlowPersistence):
                     serialized_msg = {
                         "content": getattr(msg, "content", str(msg)),
                         "role": getattr(msg, "role", "assistant"),
-                        "id": getattr(msg, "id", str(uuid.uuid4()))
+                        "id": getattr(msg, "id", str(uuid.uuid4())),
                     }
 
                 # Ensure necessary fields are present for crewai_flow_messages_to_copilotkit
@@ -138,11 +148,15 @@ class InMemoryFlowPersistence(FlowPersistence):
                                 if "function" not in tool_call:
                                     tool_call["function"] = {
                                         "name": tool_call.get("name", f"tool_{i}"),
-                                        "arguments": tool_call.get("arguments", "{}")
+                                        "arguments": tool_call.get("arguments", "{}"),
                                     }
                                 elif isinstance(tool_call["function"], dict):
-                                    if "arguments" in tool_call["function"] and not isinstance(tool_call["function"]["arguments"], str):
-                                        tool_call["function"]["arguments"] = json.dumps(tool_call["function"]["arguments"])
+                                    if "arguments" in tool_call["function"] and not isinstance(
+                                        tool_call["function"]["arguments"], str
+                                    ):
+                                        tool_call["function"]["arguments"] = json.dumps(
+                                            tool_call["function"]["arguments"]
+                                        )
 
                 serialized_messages.append(serialized_msg)
 
@@ -151,7 +165,9 @@ class InMemoryFlowPersistence(FlowPersistence):
 
         # Special handling for CopilotKitProperties
         if "copilotkit" in state_dict:
-            print(f"[SAVE DEBUG] Handling copilotkit property of type {type(state_dict['copilotkit']).__name__}")
+            print(
+                f"[SAVE DEBUG] Handling copilotkit property of type {type(state_dict['copilotkit']).__name__}"
+            )
             if hasattr(state_dict["copilotkit"], "model_dump"):
                 state_dict["copilotkit"] = state_dict["copilotkit"].model_dump()
             elif hasattr(state_dict["copilotkit"], "dict"):
@@ -212,11 +228,8 @@ class InMemoryFlowPersistence(FlowPersistence):
         # Check if we have the exact ID
         state = self.storage.get(flow_uuid)
 
-
         if not state:
             return None
-
-
 
         # Ensure state ID matches the flow_uuid
         if "id" in state and state["id"] != flow_uuid:
@@ -256,8 +269,10 @@ class InMemoryFlowPersistence(FlowPersistence):
 
             return serializable_state
 
+
 # Create an instance
 persistence = InMemoryFlowPersistence()
+
 
 @persist(persistence=persistence)
 class SampleAgentFlow(Flow[AgentState]):
@@ -265,11 +280,16 @@ class SampleAgentFlow(Flow[AgentState]):
     This is a sample flow that uses the CopilotKit framework to create a chat agent.
     """
 
-    def __init__(self, thread_id=None, **kwargs):
-        """Initialize the flow with an optional threadId."""
-
-        # First do the standard initialization
+    def __init__(self, thread_id=None, user_jwt=None, **kwargs):
+        """Initialize the flow with an optional threadId and user_jwt."""
         super().__init__(**kwargs)
+
+        # Add user context if JWT is passed
+        if hasattr(self, "_state"):
+            if isinstance(self._state, dict) and "user_jwt" in self._state:
+                self.user_jwt = self._state["user_jwt"]
+            elif hasattr(self._state, "user_jwt"):
+                self.user_jwt = getattr(self._state, "user_jwt")
 
         # Check what ID was automatically created
         auto_id = None
@@ -281,7 +301,6 @@ class SampleAgentFlow(Flow[AgentState]):
 
         # If thread_id is provided, ensure it's in both the state and directly in flow.state.id
         if thread_id:
-
             # Set it directly on the state object
             if isinstance(self.state, dict):
                 self.state["id"] = thread_id
@@ -305,7 +324,6 @@ class SampleAgentFlow(Flow[AgentState]):
         # The CopilotKit SDK's execute_flow method automatically sets state['id'] = thread_id
         # This ensures the Flow's state ID matches the threadId from the frontend
 
-
         # No need for any manual ID manipulation
 
     @router(start_flow)
@@ -320,31 +338,43 @@ class SampleAgentFlow(Flow[AgentState]):
         For more about the ReAct design pattern, see:
         https://www.perplexity.ai/search/react-agents-NcXLQhreS0WDzpVaS4m9Cg
         """
-        system_prompt = f"You are a helpful assistant. Talk in {self.state.language}. You can help users add proverbs to their collection using the 'addProverb' action. Current proverbs collected: {len(self.state.proverbs)}"
+        system_prompt = f"You are a helpful assistant. Talk in {self.state.language}. You can help users login and logout depending on their currently authenticated state using the 'authenticate' action. You can also provide info regarding the user's identity including their currently assigned permissions using the 'authorize' action. You can help users add proverbs to their collection using the 'addProverb' action. Current proverbs collected: {len(self.state.proverbs)}"
+
+        # Get Frontegg-connected tools in CrewAI-compatible format
+        config = FronteggAiClientConfig(
+            environment=Environment.US,
+            agent_id=getenv("FRONTEGG_AGENT_ID"),
+            client_id=getenv("FRONTEGG_CLIENT_ID"),
+            client_secret=getenv("FRONTEGG_CLIENT_SECRET"),
+        )
+        client = FronteggAiClient(config)
+
+        tools = [GET_WEATHER_TOOL]
+        if hasattr(self, "_state"):
+            if isinstance(self._state, dict) and "user_jwt" in self._state:
+                self.user_jwt = self._state["user_jwt"]
+            elif hasattr(self._state, "user_jwt"):
+                self.user_jwt = getattr(self._state, "user_jwt")
+
+        if hasattr(self, "user_jwt") and self.user_jwt:
+            client.set_user_context_by_jwt(self.user_jwt)
+            tools.append(await client.list_tools_as_crewai_tools())
 
         response = await copilotkit_stream(
             completion(
                 # 1.1 Specify the model to use
                 model="openai/gpt-4o",
                 messages=[
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    *self.state.messages
+                    {"role": "system", "content": system_prompt},
+                    *self.state.messages,
                 ],
-
                 # 1.2 Bind the tools to the model
-                tools=[
-                    *self.state.copilotkit.actions,
-                    GET_WEATHER_TOOL
-                ],
-
+                tools=[*self.state.copilotkit.actions, *tools],
                 # 1.3 Disable parallel tool calls to avoid race conditions,
                 #     enable this for faster performance if you want to manage
                 #     the complexity of running tool calls in parallel.
                 parallel_tool_calls=False,
-                stream=True
+                stream=True,
             )
         )
 
@@ -362,9 +392,9 @@ class SampleAgentFlow(Flow[AgentState]):
 
             # 4. Check for tool calls in the response and handle them. If the tool call
             #    is a CopilotKit action, we return the response to CopilotKit to handle
-            if (tool_call_name in
-                [action["function"]["name"] for action in self.state.copilotkit.actions]):
-
+            if tool_call_name in [
+                action["function"]["name"] for action in self.state.copilotkit.actions
+            ]:
                 return "route_end"
 
             # 5. Otherwise, we handle the tool call on the backend
@@ -372,11 +402,9 @@ class SampleAgentFlow(Flow[AgentState]):
             result = handler(tool_call_args)
 
             # 6. Append the result to the messages in state
-            self.state.messages.append({
-                "role": "tool",
-                "content": result,
-                "tool_call_id": tool_call_id
-            })
+            self.state.messages.append(
+                {"role": "tool", "content": result, "tool_call_id": tool_call_id}
+            )
 
             # 7. Return to the follow up route to continue the conversation
             return "route_follow_up"

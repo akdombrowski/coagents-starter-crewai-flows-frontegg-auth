@@ -19,7 +19,8 @@ dependencies = [
     "python-dotenv",
     "langchain-core",
     "langgraph-cli",
-    "crewai (==0.118.0)"
+    "crewai (==0.118.0)",
+    "frontegg-ai-sdk (>=1.0.0,<2.0.0)"
 ]
 
 [build-system]
